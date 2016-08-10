@@ -1,4 +1,4 @@
-{-# LANGUAGE FunctionalDependencies, OverloadedLists, FlexibleContexts, GeneralizedNewtypeDeriving, RecursiveDo, OverloadedStrings, LambdaCase, TupleSections, MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE PatternSynonyms, FunctionalDependencies, OverloadedLists, FlexibleContexts, GeneralizedNewtypeDeriving, RecursiveDo, OverloadedStrings, LambdaCase, TupleSections, MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances #-}
 module Syntax where
 
 import Data.Monoid
@@ -20,16 +20,32 @@ data LambdaPlus
     | LPCons LambdaPlus LambdaPlus
     | LPVal Value
 
-    | LPPlus LambdaPlus LambdaPlus
+    | LPBinOp String LambdaPlus LambdaPlus
 
     | LPMonitor Contract LambdaPlus
     deriving (Eq)
+
+pattern LPPlus c1 c2 = LPBinOp "+" c1 c2
+pattern LPMin c1 c2 = LPBinOp "-" c1 c2
+pattern LPMul c1 c2 = LPBinOp "*" c1 c2
+pattern LPDiv c1 c2 = LPBinOp "/" c1 c2
+pattern LPAnd c1 c2 = LPBinOp "&&" c1 c2
+pattern LPOr c1 c2 = LPBinOp "||" c1 c2
+pattern LPEq c1 c2 = LPBinOp "==" c1 c2
+pattern LPLt c1 c2 = LPBinOp "<" c1 c2
+pattern LPGt c1 c2 = LPBinOp ">" c1 c2
+
+
+
 
 instance IsString LambdaPlus where
     fromString s = LPVar s
 
 instance Num LambdaPlus where
     fromInteger n = LPVal (VInt (fromIntegral n))
+    (+) = LPPlus
+    (*) = LPMul
+    (-) = LPMin
 
 instance Show LambdaPlus where
     show t = runReader (showTerm t) 0
@@ -49,17 +65,20 @@ instance HasVars LambdaPlus String where
         LPVal v -> freeVars v
         LPPlus t1 t2 -> freeVars t1 <> freeVars t2
         LPMonitor c t -> freeVars c <> freeVars t
+        LPBinOp op t1 t2 -> freeVars t1 <> freeVars t2
+
 
 instance HasVars Contract String where
     freeVars = \case
-        CFunction x c1 c2 -> Set.difference (freeVars c1 <> freeVars c2) [x]
+        CDepFunction x c1 c2 -> Set.difference (freeVars c1 <> freeVars c2) [x]
         CRefinement x ref -> Set.difference (freeVars ref) [x]
         _ -> []
 
 patternMatch :: Pattern -> Value -> Maybe [(String, Value)]
 patternMatch PNil VNil = Just []
-patternMatch (PCons p1 p2) (VCons v1 v2) = patternMatch p1 v1 <> patternMatch p2 v2
-patternMatch (PVar x) term = Just [(x, term)]
+patternMatch (PCons p1 p2) (VCons v1 v2) = (++) <$> patternMatch p2 v2 <*> patternMatch p1 v1
+patternMatch (PVar x) val = Just [(x, val)]
+patternMatch (PBool b1) (VBool b2) | b1 == b2 = Just []
 patternMatch _ _ = Nothing
 
 instance HasVars Value String where
@@ -95,8 +114,8 @@ instance Substitutable LambdaPlus LambdaPlus String where
                         LPCons (substitute' t1) (substitute' t2)
                     (LPVal v) ->
                         LPVal (substitute s v)
-                    (LPPlus t1 t2) ->
-                        LPPlus (substitute' t1) (substitute' t2)
+                    (LPBinOp op t1 t2) ->
+                        LPBinOp op (substitute' t1) (substitute' t2)
                     (LPMonitor c t) ->
                         LPMonitor (substitute s c) (substitute' t)
 
@@ -108,10 +127,10 @@ instance Substitutable Contract LambdaPlus String where
         where introducedVars = freeVars t
               substitute' c =
                   case c of
-                      CFunction y c1 c2
+                      CDepFunction y c1 c2
                           | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in function contract: " <> show c
                           | y == x -> c
-                          | otherwise -> CFunction y (substitute' c1) (substitute' c2)
+                          | otherwise -> CDepFunction y (substitute' c1) (substitute' c2)
                       CRefinement y t
                           | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in refinement contract: " <> show c
                           | y == x -> c
@@ -122,9 +141,9 @@ binds :: Pattern -> String -> Bool
 binds p x = x `elem` (boundVars p)
 
 boundVars :: Pattern -> Set String
-boundVars PNil = []
 boundVars (PCons p1 p2) = boundVars p1 <> boundVars p2
 boundVars (PVar x) = [x]
+boundVars _ = []
 
 instance Substitutable Value LambdaPlus String where
     substitute s@(x, t) v = substitute' v
@@ -168,7 +187,7 @@ showTerm term = do
         LPCons t1 t2 -> (\x y -> x <> " : " <> y) <$> showTerm t1 <*> showTerm t2
         LPVal v -> showValue v
 
-        LPPlus t1 t2 -> (\x y -> x <> " + " <> y) <$> showTerm t1 <*> showTerm t2
+        LPBinOp op t1 t2 -> (\x y -> x <> " " <> op <> " " <> y) <$> showTerm t1 <*> showTerm t2
 
         LPMonitor c t -> do
                 showT <- showTerm t
@@ -178,7 +197,8 @@ instance Show Contract where
     show = \case
         CTrue -> "True"
         CFalse -> "False"
-        CFunction x c1 c2 -> mconcat ["(", x, " : ", show c1, ") ", " -> ", show c2]
+        CDepFunction "" c1 c2 -> mconcat ["(", show c1, " -> ", show c2, ")"]
+        CDepFunction x c1 c2 -> mconcat ["(", x, " : ", show c1, ") ", " -> ", show c2]
         CRefinement x t -> mconcat ["{", x, " : ", show t, "}" ]
 
 showCases :: [(Pattern, LambdaPlus)] -> Reader Indentation String
@@ -192,12 +212,14 @@ data Pattern
     = PVar String
     | PNil
     | PCons Pattern Pattern
+    | PBool Bool
     deriving (Eq)
 
 instance Show Pattern where
     show (PVar x) = x
     show (PNil) = "[]"
     show (PCons p1 p2) = "(" <> show p1 <> " : " <> show p2 <> ")"
+    show (PBool b) = show b
 
 instance IsString Pattern where
     fromString s = PVar s
@@ -207,8 +229,7 @@ data Value
     | VCons Value Value
     | VNil
     | VLam String LambdaPlus
-    | VTrue
-    | VFalse
+    | VBool Bool
     deriving (Eq)
 
 instance Show Value where
@@ -226,8 +247,8 @@ showValue v = do
         VNil -> return "[]"
         VLam str term ->
             (\t -> "\\" <> str <> " -> " <> t) <$> showTerm term
-        VTrue -> return "True"
-        VFalse -> return "False"
+        (VBool True) -> return "True"
+        (VBool False) -> return "False"
 -- TODO alpha equivalence
 
 --instance Eq Value where
@@ -240,7 +261,7 @@ data Contract
     = CTrue
     | CFalse
     | CRefinement String LambdaPlus
-    | CFunction String Contract Contract
+    | CDepFunction String Contract Contract
     deriving (Eq)
 
 -- * evaluation
@@ -279,6 +300,10 @@ raiseViolation m = tell [m]
 eval :: LambdaPlus -> (Either String Value, [MonitorResult])
 eval t = runWriter . runExceptT . runEval $ eval' t
 
+unsafeEval t = case eval t of
+    (Right v, _) -> v
+
+
 eval' :: LambdaPlus -> Eval Value
 eval' t =
     case t of
@@ -301,10 +326,19 @@ eval' t =
                 ((substitutions, rhs):_) -> eval' (foldr substitute rhs substitutions)
         LPVal v ->
             return v
-        LPPlus t1 t2 -> do
-            (VInt x) <- eval' t1
-            (VInt y) <- eval' t2
-            return (VInt (x+y))
+        LPPlus t1 t2 -> intOp (+) t1 t2
+        LPMin t1 t2 -> intOp (-) t1 t2
+        LPMul t1 t2 -> intOp (*) t1 t2
+        LPAnd t1 t2 -> boolOp (&&) t1 t2
+        LPOr t1 t2 -> boolOp (||) t1 t2
+        LPGt t1 t2 -> intPred (>) t1 t2
+        LPLt t1 t2 -> intPred (<) t1 t2
+
+        LPEq t1 t2 -> do
+            v1 <- eval' t1
+            v2 <- eval' t2
+            return (VBool $ v1 == v2)
+
         LPMonitor CTrue t ->
             eval' t
         LPMonitor CFalse t -> do
@@ -314,11 +348,11 @@ eval' t =
             v <- eval' t
             res <- evalRefinement (substitute (var, v) ref)
             case res of
-                VFalse -> raiseViolation (MFail $ show t <> " does not satisfy " <> show c)
-                VTrue -> return ()
+                (VBool False) -> raiseViolation (MFail $ show t <> " does not satisfy " <> show c)
+                (VBool True) -> return ()
                 _ -> throwError $ "Type error in contract: " <> show c
             eval' t
-        LPMonitor c@(CFunction x c1 c2) t -> do
+        LPMonitor c@(CDepFunction x c1 c2) t -> do
             VLam x b <- eval' t
             return (VLam x
                        (LPCase (LPMonitor c1 (LPVar x))
@@ -326,11 +360,88 @@ eval' t =
                        )
                    )
 
+    where intOp op t1 t2 = do
+            (VInt x) <- eval' t1
+            (VInt y) <- eval' t2
+            return (VInt (x `op` y))
+          boolOp op t1 t2 = do
+            (VBool x) <- eval' t1
+            (VBool y) <- eval' t2
+            return (VBool (x `op` y))
+          intPred op t1 t2 = do
+            (VInt x) <- eval' t1
+            (VInt y) <- eval' t2
+            return (VBool (x `op` y))
+
 -- Obtain a message somehow
 evalRefinement :: LambdaPlus -> Eval Value
 evalRefinement t = do
     eval' t
 
+
+-- * Annotators
+
+type Annotator = Contract -> LambdaPlus -> LambdaPlus
+
+a_0 :: Annotator
+a_0 c term = LPMonitor c term
+
+
+pattern CFunction c1 c2 = CDepFunction "" c1 c2
+pattern Foldr t1 t2 = LPApp (LPApp (LPVar "foldr") t1) t2
+
+a_foldr :: Annotator
+a_foldr (CDepFunction _ CTrue c2) (Foldr t1 t2) = Foldr (LPMonitor fContract t1) (LPMonitor eContract t2)
+    where
+        eContract = c2
+        fContract = CTrue `CFunction` CTrue `CFunction` c2
+a_foldr c t = a_0 c t
+
+
+cSorted :: Contract
+cSorted = undefined
+
+def_isPerm = def_sort .
+    LPLet "isPerm" (lams ["xs", "ys"] (app "sort" "xs" `LPEq` app "sort" "ys"))
+
+def_nonDesc =
+    LPLet "nondesc"
+                     (lam "xs"
+                        (LPCase "xs"
+                            [
+                              (PNil, LPVal $ VBool True)
+                            , (PCons "x" PNil, LPVal $ VBool True)
+                            , (PCons "x" (PCons "y" "xs"), ("x" `LPLt` "y") `LPAnd` (app "nondesc" (LPCons "y" "xs")))
+                            ]
+                        )
+                     )
+
+ifthenelse :: LambdaPlus -> LambdaPlus -> LambdaPlus -> LambdaPlus
+ifthenelse p t1 t2 = LPCase p [(PBool True, t1), (PBool False, t2)]
+
+def_sort = def_foldr .
+    LPLet "sort"
+                (LPLet "insert"
+                    (
+                        lams ["x", "xs"]
+                        (
+                            LPCase "xs"
+                                [
+                                  (PNil, list ["x"])
+                                , (PCons "y" "ys", ifthenelse ("x" `LPLt` "y") (LPCons "x" (LPCons "y" "ys")) (LPCons "y" (apps ["insert", "x", "ys"])) )
+                                ]
+                        )
+                    )
+                    (
+                        lam "xs" (apps ["foldr", "insert", LPVal VNil, "xs"])
+                    )
+                )
+
+
+a_foldr_dep :: Annotator
+a_foldr_dep (CDepFunction xs CTrue c@(CRefinement _ _)) (Foldr t1 t2) =
+    def_foldr' c (apps ["foldr'", "f", "e"])
+a_foldr_dep c t = a_0 c t
 
 -- Test programs
 
@@ -355,6 +466,9 @@ _id = lam "x" "x"
 _const :: LambdaPlus
 _const = lams ["x","y"] "x"
 
+_sum :: LambdaPlus
+_sum = Foldr _plus 0
+
 list :: [LambdaPlus] -> LambdaPlus
 list = foldr LPCons (LPVal VNil)
 
@@ -371,17 +485,36 @@ def_foldr = LPLet "foldr" (lams
                               )
                          )
 
+def_foldr' :: Contract -> LambdaPlus -> LambdaPlus
+def_foldr' contract = LPLet "foldr'" (lams
+                              ["c", "f", "e", "xs"]
+                              (LPMonitor contract
+                                    (LPCase "xs"
+                                        [
+                                            (PNil, "e")
+                                        ,   (PCons "x" "xs", apps ["f", "x", apps ["foldr'", "c", "f", "e", "xs"]])
+                                        ]
+                                    )
+                              )
+                         )
+
 _foldr = def_foldr "foldr"
 
 
 
+test_a_0 = a_0 (CRefinement "x" (LPVal (VBool True))) test_foldr
+
+
 -- * Tests
+
+test_sort = eval $ (def_foldr $ def_sort (app "sort" (list [5,4,3,2,1,3,6])))
+test_isPerm = eval $ def_isPerm (apps ["isPerm", list [3,1,4,1,5], list [1,4,3,1,5]])
 
 test_id = eval (app _id _id) == (Right (VLam "x" "x"), [])
 test_foldr = def_foldr $ apps ["foldr", _plus, 0, list [1,2,3,4,5]]
 
-test_contract_pass = LPMonitor (CRefinement "x" (LPVal VTrue)) test_foldr
-test_contract_fail = LPMonitor (CRefinement "x" (LPVal VFalse)) test_foldr
+test_contract_pass = LPMonitor (CRefinement "x" (LPVal (VBool True))) test_foldr
+test_contract_fail = LPMonitor (CRefinement "x" (LPVal (VBool False))) test_foldr
 
 --eval' :: Env -> LambdaPlus -> Value
 --eval' env term =
