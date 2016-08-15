@@ -16,10 +16,14 @@ import Eval
 import Programs
 
 
-test_a_0 = a_0 (CRefinement "x" (LPVal (VBool True))) test_foldr
-
 
 -- * Tests
+
+test_a0_nondescending = eval (prelude $ a_0 cSorting (student_sort))
+
+test_a0_sorting = eval (prelude $ a_0 cSorting (student_sort_wrong))
+
+
 
 test_sort = eval $ (def_foldr $ def_insert $ def_sort (app "sort" (list [5,4,3,2,1,3,6])))
 test_isPerm = eval $ def_isPerm (apps ["isPerm", list [3,1,4,1,5], list [1,4,3,1,5]])
@@ -27,5 +31,6 @@ test_isPerm = eval $ def_isPerm (apps ["isPerm", list [3,1,4,1,5], list [1,4,3,1
 test_id = eval (app _id _id) == (Right (VClosure "x" "x" []), MSuccess)
 test_foldr = def_foldr $ apps ["foldr", _plus, 0, list [1,2,3,4,5]]
 
-test_contract_pass = LPMonitor (CRefinement "x" (LPVal (VBool True))) test_foldr
-test_contract_fail = LPMonitor (CRefinement "x" (LPVal (VBool False))) test_foldr
+
+test_contract_pass = LPMonitor (CRefinement "x" (LPVal (VBool True)) (const "equivalent to CTrue")) test_foldr
+test_contract_fail = LPMonitor (CRefinement "x" (LPVal (VBool False)) (const "equivalent to CFalse")) test_foldr

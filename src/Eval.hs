@@ -10,15 +10,19 @@ import Control.Monad.Reader
 import qualified Data.Set as Set
 import Data.Set (Set)
 import Data.Maybe
+import Debug.Trace
 
 import Syntax
 
 data MonitorResult
     = MFail String
     | MSuccess
+    | MCons MonitorResult MonitorResult
     deriving (Show, Eq)
 
-instance Monoid MonitorResult where
+
+
+instance Monoid MonitorResult where    
     m@(MFail _) `mappend` _ = m
     _ `mappend` x = x
     mempty = MSuccess
@@ -54,12 +58,17 @@ eval t =
 violation :: String -> Eval ()
 violation msg = tell (MFail msg)
 
+
+-- | Basically substitution but without the act of replacing
+-- variables, but rememembering the substitution in an environment
+-- of the value
 addToClosure :: (String, Value) -> Value -> Value
 addToClosure (x, xv) = \case
     VCons v1 v2 -> VCons (addToClosure (x, xv) v1) (addToClosure (x, xv) v2)
     VClosure y t env
-        | x == y -> VClosure y t env
-        | otherwise -> VClosure y t ((x,xv):env)
+        | x == y                -> VClosure y t env -- x is shadowed by the closure
+        | isJust (lookup x env) -> VClosure y t env -- x is already "bound" by the environment
+        | otherwise             -> VClosure y t ((x,xv):env)
     v -> v
 
 unsafeEval :: LambdaPlus -> Value
@@ -79,17 +88,15 @@ eval' t =
                 Nothing -> throwError ("Not in scope: " <> x <> "\nEnvironment: \n" <> prettyEnv <> ")")
                 Just v -> return v
         LPApp t1 t2 -> do
-            VClosure x t env <- eval' t1
+            VClosure x t t1Env <- eval' t1
             v <- eval' t2
-            -- Evaluate the body with an extended environemnt:
-            -- the argument and the closure from the lambda itself
-            let extEnv = (x,v):env
+            let extEnv = (x,v):t1Env
             v' <- local (extEnv ++) (eval' t)
             return $ foldr addToClosure v' extEnv
         LPLet x t1 t2 -> do
             rec v <- local ((x, v):) (eval' t1)
-            v <- local ((x,v):) (eval' t2)
-            return (addToClosure (x,v) v)
+            v' <- local ((x,v):) (eval' t2)
+            return (addToClosure (x,v) v')
         LPCons h t ->
             VCons <$> eval' h <*> eval' t
         LPCase t cases -> do
@@ -97,10 +104,11 @@ eval' t =
             let matches = mapMaybe (\(p, t) -> (,t) <$> patternMatch p v) cases
             env <- ask
             case matches of
-                [] -> throwError $ "No pattern matched for " <> show v <> "\nenv: " <> show env
-                ((bindings, rhs):_) -> local (bindings ++) (eval' rhs)
-        LPVal v ->
-            return v
+                [] -> throwError $ "No pattern matched for value \n" <> show v <> "\n\n with patterns " <> show (map fst cases) <> "\n\n with env " <> show env
+                ((bindings, rhs):_) -> do
+                    v'<- local (bindings ++) (eval' rhs)
+                    return (foldr addToClosure v' bindings)
+        LPVal v -> return v
         LPPlus t1 t2 -> intOp (+) t1 t2
         LPMin t1 t2 -> intOp (-) t1 t2
         LPMul t1 t2 -> intOp (*) t1 t2
@@ -114,11 +122,19 @@ eval' t =
         LPMonitor CFalse t -> do
             violation "False contract occurred"
             eval' t
-        LPMonitor c@(CRefinement x ref) t -> do
+        LPMonitor (CAnd c1 c2) t -> do
+            v <- eval' (LPMonitor c1 t)
+            v' <- eval' (LPMonitor c2 t)
+            when (v /= v') (throwError "Monitor is inconsistent") -- needed for forcing both evaluations
+            return v
+        LPMonitor c@(CRefinement x ref describe) t -> do
             v <- eval' t
             res <- local ((x, v):) (evalRefinement ref)
-            when (res == VBool False) $ do
-                violation (show t <> " does not satisfy " <> show c)
+            env <- ((x,v):) <$> ask
+            case res of
+                VBool True  -> return () >> trace "True" (return ())
+                VBool False -> trace "False" (return ()) >> violation (describe (\var -> show . fromJust $ lookup var env))
+                _ -> throwError $ "Refinement is not a boolean: " <> show res
             return v
         LPMonitor c@(CDepFunction x c1 c2) t -> do
             VClosure x b env <- eval' t
@@ -141,6 +157,17 @@ eval' t =
             (VInt x) <- eval' t1
             (VInt y) <- eval' t2
             return (VBool (x `op` y))
+
+simplerTerm :: LambdaPlus -> Env -> LambdaPlus
+simplerTerm t env = foldr substitute t simpleSubstitutions
+    where
+        simpleSubstitutions = filter (isSimpleValue . snd) env
+        isSimpleValue = \case
+            VClosure _ _ _ -> False
+            VCons v1 v2 -> isSimpleValue v1 && isSimpleValue v2 
+            _ -> True
+
+generateMessage v c = "Value " <> show v <> " does not satisfy " <> show c
 
 
 evalRefinement :: LambdaPlus -> Eval Value

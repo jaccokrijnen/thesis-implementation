@@ -29,7 +29,9 @@ a_foldr c t = a_0 c t
 cSorting :: Contract
 cSorting = CDepFunction "xs"
                 CTrue
-                (CRefinement "r" (def_isPerm . def_nonDesc $ apps ["isPerm", "r", "xs"] `LPAnd` app "nonDesc" "r"))
+                (CAnd (CRefinement "r" (def_nonDesc $ app "nonDesc" "r") (const "non-descending"))
+                      (CRefinement "r" (def_sort . def_isPerm $ apps ["isPerm", "r", "xs"]) (\var2str -> "a permutation of " <> var2str "xs"))
+                )
 
 def_isPerm =
     LPLet "isPerm" (lams ["xs", "ys"] (app "sort" "xs" `LPEq` app "sort" "ys"))
@@ -41,7 +43,7 @@ def_nonDesc =
                             [
                               (PNil, LPVal $ VBool True)
                             , (PCons "x" PNil, LPVal $ VBool True)
-                            , (PCons "x" (PCons "y" "xs"), ("x" `LPLt` "y") `LPAnd` (app "nonDesc" (LPCons "y" "xs")))
+                            , (PCons "x" (PCons "y" "xs"), (("x" `LPLt` "y") `LPOr` ("x" `LPEq` "y")) `LPAnd` (app "nonDesc" (LPCons "y" "xs")))
                             ]
                         )
                      )
@@ -70,26 +72,11 @@ def_sort =
         )
 
 
-{-
-
-CURRENT PROBLEM:
-
-do in ghci:
-
-let f = a_foldr_dep cSorting student_sort
-evalIO $ prelude f
-
-??? deF_foldr' moet aan prelude toegevoegd, maar waarom is in het geevalueerde
-programma  de term die wordt gemonitord een recursieve call naar foldr?
-
--}
-
-
 student_sort = def_insert $ (apps ["foldr", "insert", LPVal VNil])
-student_sort_wrong = def_insert_wrong $ (apps ["foldr", "insert", LPVal VNil])
+student_sort_wrong = def_insert_wrong $ (apps ["foldr", "insert_wrong", LPVal VNil])
 
 def_insert_wrong =
-    (LPLet "insert"
+    (LPLet "insert_wrong"
         (
             lams ["x", "xs"]
             (
@@ -103,10 +90,12 @@ def_insert_wrong =
     )
 
 
+pattern Foldr t1 t2 = LPApp (LPApp (LPVar "foldr") t1) t2
+
 a_foldr_dep :: Annotator
 a_foldr_dep c (LPLet x t1 t2) = LPLet x t1 (a_foldr_dep c t2)
-a_foldr_dep (CDepFunction xs CTrue c@(CRefinement _ _)) (Foldr t1 t2) =
-    def_foldr' c (apps ["foldr'", t1, t2])
+a_foldr_dep (CDepFunction xs CTrue c) (LPApp (LPApp (LPVar "foldr") t1) t2) =
+    def_foldr' (t1, t2) c $ (apps ["foldr'", t1, t2])
 a_foldr_dep c t = a_0 c t
 
 -- Test programs
@@ -135,9 +124,6 @@ _const = lams ["x","y"] "x"
 _sum :: LambdaPlus
 _sum = Foldr _plus 0
 
-list :: [LambdaPlus] -> LambdaPlus
-list = foldr LPCons (LPVal VNil)
-
 _plus = lams ["x", "y"] (LPPlus "x" "y")
 
 def_foldr :: LambdaPlus -> LambdaPlus
@@ -150,18 +136,20 @@ def_foldr = LPLet "foldr" (lams
                                     ]
                               )
                          )
-
-def_foldr' :: Contract -> LambdaPlus -> LambdaPlus
-def_foldr' contract = LPLet "foldr'" (lams
-                              ["f", "e", "xs"]
-                              (LPMonitor contract
-                                    (LPCase "xs"
-                                        [
-                                            (PNil, "e")
-                                        ,   (PCons "x" "xs", apps ["f", "x", apps ["foldr'", "f", "e", "xs"]])
-                                        ]
-                                    )
+-- | Introduces a definition onf foldr' with specific feedback using
+-- the terms of the arguments of foldr for better feedback messages
+def_foldr' :: (LambdaPlus, LambdaPlus) -> Contract -> LambdaPlus -> LambdaPlus
+def_foldr' (f, e) contract = 
+    LPLet "foldr'" (lams
+                        ["f", "e", "xs"]
+                        (LPMonitor contract
+                              (LPCase "xs"
+                                  [
+                                      (PNil, "e")
+                                  ,   (PCons "x" "xs", apps ["f", "x", apps ["foldr'", "f", "e", "xs"]])
+                                  ]
                               )
-                         )
+                        )
+                   )
 
 _foldr = def_foldr "foldr"

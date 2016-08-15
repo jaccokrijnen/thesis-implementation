@@ -1,5 +1,5 @@
 {-# LANGUAGE PatternSynonyms, FunctionalDependencies, OverloadedLists, FlexibleContexts, GeneralizedNewtypeDeriving, RecursiveDo, OverloadedStrings, LambdaCase, TupleSections, MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances #-}
-module Eval_Old where
+module EvalSubst where
 
 import Data.Monoid
 import Data.String
@@ -14,12 +14,34 @@ import Data.Maybe
 import Syntax
 
 
+
+
+
+
+-- This module implements evaluation by performing substitution for variables when 
+-- bound to a value, as the formal specification states in the thesis.
+-- This is however not very efficient in practice, therefore the actual
+-- implementation of operational semantics is in Eval.hs, which uses closures
+-- instead.
+
+
 newtype Eval a = Eval (ExceptT
                            String
                            (Writer [MonitorResult])
                            a
                       )
     deriving (Functor, Applicative, Monad, MonadFix, MonadWriter [MonitorResult], MonadError String)
+
+data MonitorResult
+    = MFail String
+    | MSuccess
+    deriving (Show, Eq)
+
+instance Monoid MonitorResult where
+    m@(MFail _) `mappend` _ = m
+    _ `mappend` x = x
+    mempty = MSuccess
+
 
 runEval (Eval x) = x
 
@@ -46,7 +68,7 @@ eval' t =
         LPVar x ->
             throwError $ "Free variable: " <> x
         LPApp t1 t2 -> do
-            VLam x t <- eval' t1
+            VClosure x t _ <- eval' t1
             v        <- eval' t2
             eval' (substitute (x, v) t)
         LPLet x t1 t2 -> do
@@ -80,7 +102,7 @@ eval' t =
         LPMonitor CFalse t -> do
             raiseViolation (MFail "False contract occurred")
             eval' t
-        LPMonitor c@(CRefinement var ref) t -> do
+        LPMonitor c@(CRefinement var ref describe) t -> do
             v <- eval' t
             res <- evalRefinement (substitute (var, v) ref)
             case res of
@@ -89,11 +111,12 @@ eval' t =
                 _ -> throwError $ "Type error in contract: " <> show c
             eval' t
         LPMonitor c@(CDepFunction x c1 c2) t -> do
-            VLam x b <- eval' t
-            return (VLam x
+            VClosure x b _ <- eval' t
+            return (VClosure x
                        (LPCase (LPMonitor c1 (LPVar x))
                                [(PVar x, (LPMonitor c2 b))]
                        )
+                       []
                    )
 
     where intOp op t1 t2 = do
@@ -109,7 +132,6 @@ eval' t =
             (VInt y) <- eval' t2
             return (VBool (x `op` y))
 
--- Obtain a message somehow
 evalRefinement :: LambdaPlus -> Eval Value
 evalRefinement t = do
     eval' t
