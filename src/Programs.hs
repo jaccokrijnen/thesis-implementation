@@ -25,13 +25,27 @@ a_foldr (CDepFunction _ CTrue c2) (Foldr t1 t2) = Foldr (LPMonitor fContract t1)
         fContract = CTrue `CFunction` CTrue `CFunction` c2
 a_foldr c t = a_0 c t
 
-
 cSorting :: Contract
-cSorting = CDepFunction "xs"
-                CTrue
-                (CAnd (CRefinement "r" (def_nonDesc $ app "nonDesc" "r") (const "non-descending"))
-                      (CRefinement "r" (def_sort . def_isPerm $ apps ["isPerm", "r", "xs"]) (\var2str -> "a permutation of " <> var2str "xs"))
-                )
+cSorting = cSorting' Nothing
+
+-- | The lambda term supplied can be used for the feedback message,
+cSorting' :: Maybe (Env -> LambdaPlus) -> Contract
+cSorting' mTerm =
+    CDepFunction "xs"
+        CTrue
+        (CAnd (CRefinement
+                  "r"
+                  (def_nonDesc $ app "nonDesc" "r")
+                  (const "non-descending")
+                  mTerm
+              )
+              (CRefinement
+                  "r"
+                  (def_sort . def_isPerm $ apps ["isPerm", "r", "xs"])
+                  (\var2str -> "a permutation of " <> var2str "xs")
+                  mTerm
+              )
+        )
 
 def_isPerm =
     LPLet "isPerm" (lams ["xs", "ys"] (app "sort" "xs" `LPEq` app "sort" "ys"))
@@ -72,8 +86,12 @@ def_sort =
         )
 
 
-student_sort = def_insert $ (apps ["foldr", "insert", LPVal VNil])
-student_sort_wrong = def_insert_wrong $ (apps ["foldr", "insert_wrong", LPVal VNil])
+student_sort               = def_insert       $ apps ["foldr", "insert", LPVal VNil]
+student_sort_wrong_perm    = def_insert_wrong $ apps ["foldr", "insert_wrong", LPVal VNil]
+student_sort_wrong_nondesc = def_id           $ apps ["foldr", cons, LPVal VNil]
+
+
+def_id = LPLet "id" (lam "x" "x")
 
 def_insert_wrong =
     (LPLet "insert_wrong"
@@ -89,12 +107,11 @@ def_insert_wrong =
         )
     )
 
-
 pattern Foldr t1 t2 = LPApp (LPApp (LPVar "foldr") t1) t2
 
 a_foldr_dep :: Annotator
 a_foldr_dep c (LPLet x t1 t2) = LPLet x t1 (a_foldr_dep c t2)
-a_foldr_dep (CDepFunction xs CTrue c) (LPApp (LPApp (LPVar "foldr") t1) t2) =
+a_foldr_dep (CDepFunction xs CTrue c) (Foldr t1 t2) =
     def_foldr' (t1, t2) c $ (apps ["foldr'", t1, t2])
 a_foldr_dep c t = a_0 c t
 
@@ -139,7 +156,7 @@ def_foldr = LPLet "foldr" (lams
 -- | Introduces a definition onf foldr' with specific feedback using
 -- the terms of the arguments of foldr for better feedback messages
 def_foldr' :: (LambdaPlus, LambdaPlus) -> Contract -> LambdaPlus -> LambdaPlus
-def_foldr' (f, e) contract = 
+def_foldr' (f, e) contract =
     LPLet "foldr'" (lams
                         ["f", "e", "xs"]
                         (LPMonitor contract

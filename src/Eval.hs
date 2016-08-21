@@ -22,7 +22,7 @@ data MonitorResult
 
 
 
-instance Monoid MonitorResult where    
+instance Monoid MonitorResult where
     m@(MFail _) `mappend` _ = m
     _ `mappend` x = x
     mempty = MSuccess
@@ -46,7 +46,7 @@ evalIO :: LambdaPlus -> IO ()
 evalIO t = do
     case eval t of
         (Left error, _) -> putStrLn $ "\nLambdaPlus runtime error: \n" <> error
-        (_, MFail msg) -> print msg
+        (_, MFail msg) -> putStrLn msg
         (Right v, _) -> print v
 
 eval t =
@@ -127,14 +127,26 @@ eval' t =
             v' <- eval' (LPMonitor c2 t)
             when (v /= v') (throwError "Monitor is inconsistent") -- needed for forcing both evaluations
             return v
-        LPMonitor c@(CRefinement x ref describe) t -> do
-            v <- eval' t
+        LPMonitor c@(CRefinement x ref describe mEnv2Term) t -> do
+            v   <- eval' t
             res <- local ((x, v):) (evalRefinement ref)
             env <- ((x,v):) <$> ask
             case res of
-                VBool True  -> return () >> trace "True" (return ())
-                VBool False -> trace "False" (return ()) >> violation (describe (\var -> show . fromJust $ lookup var env))
-                _ -> throwError $ "Refinement is not a boolean: " <> show res
+                VBool True  ->
+                    return ()
+                VBool False ->
+                    let msg = case mEnv2Term of
+                                Just env2term ->
+                                    "Term " <> show (env2term env) <> " evaluates to "
+                                            <> show v <> " which is not "
+                                            <> describe (\var -> show . fromJust $ lookup var env)
+                                _ ->
+                                    "Value " <> show v <> " is not "
+                                             <> describe (\var -> show . fromJust $ lookup var env)
+
+                    in  violation msg
+                _ ->
+                    throwError $ "Refinement is not a boolean: " <> show res
             return v
         LPMonitor c@(CDepFunction x c1 c2) t -> do
             VClosure x b env <- eval' t
@@ -164,7 +176,7 @@ simplerTerm t env = foldr substitute t simpleSubstitutions
         simpleSubstitutions = filter (isSimpleValue . snd) env
         isSimpleValue = \case
             VClosure _ _ _ -> False
-            VCons v1 v2 -> isSimpleValue v1 && isSimpleValue v2 
+            VCons v1 v2 -> isSimpleValue v1 && isSimpleValue v2
             _ -> True
 
 generateMessage v c = "Value " <> show v <> " does not satisfy " <> show c

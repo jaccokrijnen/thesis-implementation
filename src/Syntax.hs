@@ -23,6 +23,8 @@ data LambdaPlus
     | LPBinOp String LambdaPlus LambdaPlus
 
     | LPMonitor Contract LambdaPlus
+
+    | LPTransformedTo LambdaPlus LambdaPlus
     deriving (Eq)
 
 pattern LPPlus c1 c2 = LPBinOp "+" c1 c2
@@ -66,12 +68,13 @@ instance HasVars LambdaPlus String where
         LPPlus t1 t2 -> freeVars t1 <> freeVars t2
         LPMonitor c t -> freeVars c <> freeVars t
         LPBinOp op t1 t2 -> freeVars t1 <> freeVars t2
+        t1 `LPTransformedTo` t2 -> freeVars t2
 
 
 instance HasVars Contract String where
     freeVars = \case
         CDepFunction x c1 c2 -> Set.difference (freeVars c1 <> freeVars c2) [x]
-        CRefinement x ref _ -> Set.difference (freeVars ref) [x]
+        CRefinement x ref _ _ -> Set.difference (freeVars ref) [x]
         CAnd c1 c2 -> (freeVars c1) <> (freeVars c2)
         _ -> []
 
@@ -119,6 +122,8 @@ instance Substitutable LambdaPlus LambdaPlus String where
                         LPBinOp op (substitute' t1) (substitute' t2)
                     (LPMonitor c t) ->
                         LPMonitor (substitute s c) (substitute' t)
+                    (LPTransformedTo t1 t2) ->
+                        LPTransformedTo t1 (substitute' t2)
 
 instance Substitutable LambdaPlus Value String where
     substitute (x, v) = substitute (x, LPVal v)
@@ -132,10 +137,10 @@ instance Substitutable Contract LambdaPlus String where
                           | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in function contract: " <> show c
                           | y == x -> c
                           | otherwise -> CDepFunction y (substitute' c1) (substitute' c2)
-                      CRefinement y t descr
+                      CRefinement y t describe mTerm
                           | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in refinement contract: " <> show c
                           | y == x -> c
-                          | otherwise -> CRefinement y (substitute s t) descr
+                          | otherwise -> CRefinement y (substitute s t) describe mTerm
                       c -> c
 
 binds :: Pattern -> String -> Bool
@@ -193,6 +198,7 @@ showTerm term = do
         LPMonitor c t -> do
                 showT <- local (+indentAmount) (showTerm t)
                 return $ "monitor (" <> show c <> ")" <> "\n" <> whitespace depth <> "(" <> showT <> ")"
+        LPTransformedTo t1 t2 -> showTerm t2
 
 instance Show Contract where
     show = \case
@@ -201,7 +207,7 @@ instance Show Contract where
         CAnd c1 c2 -> show c1 <> " AND " <> show c2
         CDepFunction "" c1 c2 -> mconcat ["(", show c1, " -> ", show c2, ")"]
         CDepFunction x c1 c2 -> mconcat ["(", x, " : ", show c1, ") ", " -> ", show c2]
-        CRefinement x t describe -> mconcat ["{", x, " : ", describe id, "}" ]
+        CRefinement x t describe _ -> mconcat ["{", x, " : ", describe id, "}" ]
 
 showCases :: [(Pattern, LambdaPlus)] -> Reader Indentation String
 showCases cs = unlines <$> mapM showCase cs
@@ -240,6 +246,8 @@ instance Show Value where
     show v = runReader (showValue v) 0
 
 showValue :: Value -> Reader Indentation String
+showValue v | Just vs <- toList v =
+    return (show vs)
 showValue v = do
     case v of
         VInt x ->
@@ -254,7 +262,12 @@ showValue v = do
             in  (\t -> "\\" <> str <> " -> " <> t <> prettyEnv) <$> showTerm term
         (VBool True) -> return "True"
         (VBool False) -> return "False"
--- TODO alpha equivalence
+
+toList :: Value -> Maybe [Value]
+toList (VCons x t) = (x:) <$> toList t
+toList VNil = Just []
+toList _ = Nothing
+
 
 --instance Eq Value where
 --    (VInt x)    == (VInt y)    = x == y
@@ -266,39 +279,34 @@ data Contract
     = CTrue
     | CFalse
     | CAnd Contract Contract
-    | CRefinement String -- variable referring to current value
-                  LambdaPlus -- Boolean valued term
-                  ((String -> String) -> String)  -- description of this refinement for feedback message, passed a function to describe variables (e.g. an environment lookup)
+    | CRefinement
+          String -- variable referring to current value
+          LambdaPlus -- Boolean valued term
+          ((String -> String) -> String)  -- description of this refinement for pretty printing the refinement, also used for feedback message
+          (Maybe (Env -> LambdaPlus)) -- Term to display in error message, if none is provided the evaluated value will be reported
     | CDepFunction String Contract Contract
     deriving Eq
 
+
+-- | Fake instances needed for deriving Eq on terms (this is not a problem since contract
+-- descriptions are used when a violation is raised and do not influence the semantics
 instance Eq ((String -> String)-> String) where
     _ == _ = True
 
---contractMessage :: Env -> Contract -> String
---contractMessage env c = \case ->
---    CTrue  -> "True"
---    CFalse -> "False"
---contractMessage (CRefinement _ _ description) = description
---contractMessage (CAnd c1 c2) = contractMessage c1 <> " and " <> contractMessage c2
---contractMessage (CDepFunction x c1 c2) = contractMessage c1 <> " on its domain " <> x <>  ", and " <> contractMessage c2 <> " on its result" 
--- * evaluation
+instance Eq (Env -> LambdaPlus) where
+    _ == _ = True
 
 
-
--- * Evaluation with an environment instead of substitutions
-
-
-
-
-
-
-
--- * Annotators
+-- * Utils
 
 
 list :: [LambdaPlus] -> LambdaPlus
 list = foldr LPCons (LPVal VNil)
+
+dropLets :: LambdaPlus -> LambdaPlus
+dropLets (LPLet _ _ t) = dropLets t
+dropLets t = t
+
 
 
 type Annotator = Contract -> LambdaPlus -> LambdaPlus

@@ -29,11 +29,11 @@ version :: Version
 version = Version [0,1,0,0] []
 bindir, libdir, datadir, libexecdir, sysconfdir :: FilePath
 
-bindir     = "/home/jacco/projects/thesis-implementation/.cabal-sandbox/bin"
-libdir     = "/home/jacco/projects/thesis-implementation/.cabal-sandbox/lib/x86_64-linux-ghc-7.10.3/thesis-implementation-0.1.0.0-38rQGqseUhkHgLAmOLcKk3"
-datadir    = "/home/jacco/projects/thesis-implementation/.cabal-sandbox/share/x86_64-linux-ghc-7.10.3/thesis-implementation-0.1.0.0"
-libexecdir = "/home/jacco/projects/thesis-implementation/.cabal-sandbox/libexec"
-sysconfdir = "/home/jacco/projects/thesis-implementation/.cabal-sandbox/etc"
+bindir     = "C:\\Users\\Jacco\\AppData\\Roaming\\cabal\\bin"
+libdir     = "C:\\Users\\Jacco\\AppData\\Roaming\\cabal\\x86_64-windows-ghc-8.0.1\\thesis-implementation-0.1.0.0-GUbqbo3VjlH1F8Fs5xdgQU"
+datadir    = "C:\\Users\\Jacco\\AppData\\Roaming\\cabal\\x86_64-windows-ghc-8.0.1\\thesis-implementation-0.1.0.0"
+libexecdir = "C:\\Users\\Jacco\\AppData\\Roaming\\cabal\\thesis-implementation-0.1.0.0-GUbqbo3VjlH1F8Fs5xdgQU"
+sysconfdir = "C:\\Users\\Jacco\\AppData\\Roaming\\cabal\\etc"
 
 getBinDir, getLibDir, getDataDir, getLibexecDir, getSysconfDir :: IO FilePath
 getBinDir = catchIO (getEnv "thesis_implementation_bindir") (\_ -> return bindir)
@@ -45,4 +45,4 @@ getSysconfDir = catchIO (getEnv "thesis_implementation_sysconfdir") (\_ -> retur
 getDataFileName :: FilePath -> IO FilePath
 getDataFileName name = do
   dir <- getDataDir
-  return (dir ++ "/" ++ name)
+  return (dir ++ "\\" ++ name)
