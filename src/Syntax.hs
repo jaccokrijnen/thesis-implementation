@@ -1,16 +1,18 @@
 {-# LANGUAGE PatternSynonyms, FunctionalDependencies, OverloadedLists, FlexibleContexts, GeneralizedNewtypeDeriving, RecursiveDo, OverloadedStrings, LambdaCase, TupleSections, MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances, ScopedTypeVariables #-}
+
+-- | This module introduces the syntax of LambdaPlus and contracts
+-- with the nessecary utility functions/class instances
 module Syntax where
 
 import Data.Monoid
 import Data.String
-import Control.Monad.Writer
-import Control.Monad.Identity
-import Control.Monad.Except
 import Control.Monad.Reader
 import qualified Data.Set as Set
 import Data.Set (Set)
-import Data.Maybe
+import Classes
 
+
+-- | A Lambdaplus term
 data LambdaPlus
     = LPVar String
     | LPApp LambdaPlus LambdaPlus
@@ -27,17 +29,66 @@ data LambdaPlus
     | LPTransformedTo LambdaPlus LambdaPlus
     deriving (Eq)
 
+
+-- | Convenient patterns/constructors for LambdaPlus operators
 pattern LPPlus c1 c2 = LPBinOp "+" c1 c2
-pattern LPMin c1 c2 = LPBinOp "-" c1 c2
-pattern LPMul c1 c2 = LPBinOp "*" c1 c2
-pattern LPDiv c1 c2 = LPBinOp "/" c1 c2
-pattern LPAnd c1 c2 = LPBinOp "&&" c1 c2
-pattern LPOr c1 c2 = LPBinOp "||" c1 c2
-pattern LPEq c1 c2 = LPBinOp "==" c1 c2
-pattern LPLt c1 c2 = LPBinOp "<" c1 c2
-pattern LPGt c1 c2 = LPBinOp ">" c1 c2
+pattern LPMin c1 c2  = LPBinOp "-" c1 c2
+pattern LPMul c1 c2  = LPBinOp "*" c1 c2
+pattern LPDiv c1 c2  = LPBinOp "/" c1 c2
+pattern LPAnd c1 c2  = LPBinOp "&&" c1 c2
+pattern LPOr c1 c2   = LPBinOp "||" c1 c2
+pattern LPEq c1 c2   = LPBinOp "==" c1 c2
+pattern LPLt c1 c2   = LPBinOp "<" c1 c2
+pattern LPGt c1 c2   = LPBinOp ">" c1 c2
 
 
+-- | A Lambdaplus pattern
+data Pattern
+    = PVar String
+    | PNil
+    | PCons Pattern Pattern
+    | PBool Bool
+    deriving (Eq)
+
+
+-- | An environment used for representing closures and used during evaluation
+type Env = [(String, Value)]
+
+
+-- | Values
+data Value
+    = VInt Int
+    | VCons Value Value
+    | VNil
+    | VClosure String LambdaPlus Env
+    | VBool Bool
+    deriving (Eq)
+
+
+-- | Representation of a contract
+data Contract
+    = CTrue
+    | CFalse
+    | CAnd Contract Contract
+    | CRefinement
+          String                           -- ^ Variable referring to current value
+          LambdaPlus                       -- ^ The refinement, a boolean valued term that can use variables in scope
+          ((String -> String) -> String)   -- ^ Description of this refinement for pretty printing a contract, also used for feedback message
+          (Maybe (Env -> LambdaPlus))      -- ^ A term to display in the error message instead of the computed value that breaks the contract,
+                                           -- ^ should be an intermediate term during evaluation (for instance the student program + input).
+                                           -- ^ If none is provided the evaluated value will be reported
+    | CDepFunction String Contract Contract
+    deriving Eq
+
+pattern CFunction c1 c2 = CDepFunction "" c1 c2
+
+
+type Annotator = Contract -> LambdaPlus -> LambdaPlus
+
+
+----------------------------------------------------------
+-- * Instances for LambdaPlus terms
+----------------------------------------------------------
 
 
 instance IsString LambdaPlus where
@@ -48,12 +99,8 @@ instance Num LambdaPlus where
     (+) = LPPlus
     (*) = LPMul
     (-) = LPMin
-
-instance Show LambdaPlus where
-    show t = runReader (showTerm t) 0
-
-class HasVars term var | term -> var where
-    freeVars :: term -> Set var
+    abs = undefined
+    signum = undefined
 
 instance HasVars LambdaPlus String where
     freeVars = \case
@@ -70,29 +117,6 @@ instance HasVars LambdaPlus String where
         LPBinOp op t1 t2 -> freeVars t1 <> freeVars t2
         t1 `LPTransformedTo` t2 -> freeVars t2
 
-
-instance HasVars Contract String where
-    freeVars = \case
-        CDepFunction x c1 c2 -> Set.difference (freeVars c1 <> freeVars c2) [x]
-        CRefinement x ref _ _ -> Set.difference (freeVars ref) [x]
-        CAnd c1 c2 -> (freeVars c1) <> (freeVars c2)
-        _ -> []
-
-patternMatch :: Pattern -> Value -> Maybe [(String, Value)]
-patternMatch PNil VNil = Just []
-patternMatch (PCons p1 p2) (VCons v1 v2) = (++) <$> patternMatch p2 v2 <*> patternMatch p1 v1
-patternMatch (PVar x) val = Just [(x, val)]
-patternMatch (PBool b1) (VBool b2) | b1 == b2 = Just []
-patternMatch _ _ = Nothing
-
-instance HasVars Value String where
-    freeVars = \case
-        VClosure x t _ -> freeVars t `Set.difference` [x]
-        VCons v1 v2 -> freeVars v1 <> freeVars v2
-        _ -> []
-
-class Substitutable term insertTerm var | term -> var where
-    substitute :: (var, insertTerm) -> term -> term
 
 instance Substitutable LambdaPlus LambdaPlus String where
     substitute s@(x, xt) t = substitute' t
@@ -128,50 +152,11 @@ instance Substitutable LambdaPlus LambdaPlus String where
 instance Substitutable LambdaPlus Value String where
     substitute (x, v) = substitute (x, LPVal v)
 
-instance Substitutable Contract LambdaPlus String where
-    substitute s@(x, t) = substitute'
-        where introducedVars = freeVars t
-              substitute' c =
-                  case c of
-                      CDepFunction y c1 c2
-                          | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in function contract: " <> show c
-                          | y == x -> c
-                          | otherwise -> CDepFunction y (substitute' c1) (substitute' c2)
-                      CRefinement y t describe mTerm
-                          | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in refinement contract: " <> show c
-                          | y == x -> c
-                          | otherwise -> CRefinement y (substitute s t) describe mTerm
-                      c -> c
 
-binds :: Pattern -> String -> Bool
-binds p x = x `elem` (boundVars p)
-
-boundVars :: Pattern -> Set String
-boundVars (PCons p1 p2) = boundVars p1 <> boundVars p2
-boundVars (PVar x) = [x]
-boundVars _ = []
-
-instance Substitutable Value LambdaPlus String where
-    substitute s@(x, t) v = substitute' v
-        where
-              introducedVars = freeVars t
-              substitute' v =
-                case v of
-                    VCons v1 v2 -> VCons (substitute' v1) (substitute' v2)
-                    VClosure y t1 env
-                        | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in lambda: " <> show v
-                        | x == y -> VClosure y t1 env
-                        | otherwise -> VClosure y (substitute s t1) env
-                    _ -> v
-
-instance Substitutable Value Value String where
-    substitute (x, v) = substitute (x, LPVal v)
+instance Show LambdaPlus where
+    show t = runReader (showTerm t) 0
 
 type Indentation = Int
-
-indentAmount = 4
-
-whitespace n = replicate n ' '
 
 showTerm :: LambdaPlus -> Reader Indentation String
 showTerm term = do
@@ -200,14 +185,11 @@ showTerm term = do
                 return $ "monitor (" <> show c <> ")" <> "\n" <> whitespace depth <> "(" <> showT <> ")"
         LPTransformedTo t1 t2 -> showTerm t2
 
-instance Show Contract where
-    show = \case
-        CTrue -> "True"
-        CFalse -> "False"
-        CAnd c1 c2 -> show c1 <> " AND " <> show c2
-        CDepFunction "" c1 c2 -> mconcat ["(", show c1, " -> ", show c2, ")"]
-        CDepFunction x c1 c2 -> mconcat ["(", x, " : ", show c1, ") ", " -> ", show c2]
-        CRefinement x t describe _ -> mconcat ["{", x, " : ", describe id, "}" ]
+
+indentAmount = 4
+
+whitespace n = replicate n ' '
+
 
 showCases :: [(Pattern, LambdaPlus)] -> Reader Indentation String
 showCases cs = unlines <$> mapM showCase cs
@@ -216,31 +198,44 @@ showCases cs = unlines <$> mapM showCase cs
                     <$> ask
                     <*> showTerm term
 
-data Pattern
-    = PVar String
-    | PNil
-    | PCons Pattern Pattern
-    | PBool Bool
-    deriving (Eq)
 
-instance Show Pattern where
-    show (PVar x) = x
-    show (PNil) = "[]"
-    show (PCons p1 p2) = "(" <> show p1 <> " : " <> show p2 <> ")"
-    show (PBool b) = show b
+-- | Fake instances needed for deriving Eq on terms (this is not a problem since contract
+-- descriptions are used when a violation is raised and do not influence the semantics
+instance Eq ((String -> String)-> String) where
+    _ == _ = True
 
-instance IsString Pattern where
-    fromString s = PVar s
+instance Eq (Env -> LambdaPlus) where
+    _ == _ = True
 
-type Env = [(String, Value)]
+----------------------------------------------------------
+-- * Instances for values
+----------------------------------------------------------
 
-data Value
-    = VInt Int
-    | VCons Value Value
-    | VNil
-    | VClosure String LambdaPlus Env
-    | VBool Bool
-    deriving (Eq)
+
+instance HasVars Value String where
+    freeVars = \case
+        VClosure x t _ -> freeVars t `Set.difference` [x]
+        VCons v1 v2 -> freeVars v1 <> freeVars v2
+        _ -> []
+
+
+
+instance Substitutable Value LambdaPlus String where
+    substitute s@(x, t) v = substitute' v
+        where
+              introducedVars = freeVars t
+              substitute' v =
+                case v of
+                    VCons v1 v2 -> VCons (substitute' v1) (substitute' v2)
+                    VClosure y t1 env
+                        | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in lambda: " <> show v
+                        | x == y -> VClosure y t1 env
+                        | otherwise -> VClosure y (substitute s t1) env
+                    _ -> v
+
+instance Substitutable Value Value String where
+    substitute (x, v) = substitute (x, LPVal v)
+
 
 instance Show Value where
     show v = runReader (showValue v) 0
@@ -269,39 +264,90 @@ toList VNil = Just []
 toList _ = Nothing
 
 
---instance Eq Value where
---    (VInt x)    == (VInt y)    = x == y
---    (VCons x y) == (VCons z w) = x == y && z == w
---    VNil == VNil = True
---    (VLam v)
+----------------------------------------------------------
+-- * Instances for contracts
+----------------------------------------------------------
 
-data Contract
-    = CTrue
-    | CFalse
-    | CAnd Contract Contract
-    | CRefinement
-          String -- variable referring to current value
-          LambdaPlus -- Boolean valued term
-          ((String -> String) -> String)  -- description of this refinement for pretty printing the refinement, also used for feedback message
-          (Maybe (Env -> LambdaPlus)) -- Term to display in error message, if none is provided the evaluated value will be reported
-    | CDepFunction String Contract Contract
-    deriving Eq
+instance HasVars Contract String where
+    freeVars = \case
+        CDepFunction x c1 c2 -> Set.difference (freeVars c1 <> freeVars c2) [x]
+        CRefinement x ref _ _ -> Set.difference (freeVars ref) [x]
+        CAnd c1 c2 -> (freeVars c1) <> (freeVars c2)
+        _ -> []
 
 
--- | Fake instances needed for deriving Eq on terms (this is not a problem since contract
--- descriptions are used when a violation is raised and do not influence the semantics
-instance Eq ((String -> String)-> String) where
-    _ == _ = True
+instance Substitutable Contract LambdaPlus String where
+    substitute s@(x, t) = substitute'
+        where introducedVars = freeVars t
+              substitute' c =
+                  case c of
+                      CDepFunction y c1 c2
+                          | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in function contract: " <> show c
+                          | y == x -> c
+                          | otherwise -> CDepFunction y (substitute' c1) (substitute' c2)
+                      CRefinement y t describe mTerm
+                          | y `elem` introducedVars -> error $ "Captured variable " <> y <> "in refinement contract: " <> show c
+                          | y == x -> c
+                          | otherwise -> CRefinement y (substitute s t) describe mTerm
+                      c -> c
 
-instance Eq (Env -> LambdaPlus) where
-    _ == _ = True
+
+instance Show Contract where
+    show = \case
+        CTrue -> "True"
+        CFalse -> "False"
+        CAnd c1 c2 -> show c1 <> " AND " <> show c2
+        CDepFunction "" c1 c2 -> mconcat ["(", show c1, " -> ", show c2, ")"]
+        CDepFunction x c1 c2 -> mconcat ["(", x, " : ", show c1, ") ", " -> ", show c2]
+        CRefinement x t describe _ -> mconcat ["{", x, " : ", describe id, "}" ]
 
 
--- * Utils
+
+
+----------------------------------------------------------
+-- * Instances for patterns
+----------------------------------------------------------
+
+
+instance Show Pattern where
+    show (PVar x) = x
+    show (PNil) = "[]"
+    show (PCons p1 p2) = "(" <> show p1 <> " : " <> show p2 <> ")"
+    show (PBool b) = show b
+
+instance IsString Pattern where
+    fromString s = PVar s
+
+
+----------------------------------------------------------
+-- * General utility functions
+----------------------------------------------------------
+
+
+binds :: Pattern -> String -> Bool
+binds p x = x `elem` (boundVars p)
+
+
+boundVars :: Pattern -> Set String
+boundVars (PCons p1 p2) = boundVars p1 <> boundVars p2
+boundVars (PVar x) = [x]
+boundVars _ = []
 
 
 list :: [LambdaPlus] -> LambdaPlus
 list = foldr LPCons (LPVal VNil)
+
+
+lams :: [String] -> LambdaPlus -> LambdaPlus
+lams vars body = foldr (\var body -> lam var body) body vars
+
+lam v b = LPVal (VClosure v b [])
+
+app = LPApp
+
+apps :: [LambdaPlus] -> LambdaPlus
+apps terms = foldl1 LPApp terms
+
 
 dropLets :: LambdaPlus -> LambdaPlus
 dropLets (LPLet _ _ t) = dropLets t
@@ -309,10 +355,7 @@ dropLets t = t
 
 
 
-type Annotator = Contract -> LambdaPlus -> LambdaPlus
-
-a_0 :: Annotator
-a_0 c term = LPMonitor c term
 
 
-pattern CFunction c1 c2 = CDepFunction "" c1 c2
+
+

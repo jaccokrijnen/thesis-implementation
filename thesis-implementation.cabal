@@ -16,7 +16,7 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Eval, Tests, Syntax, Programs, EvalSubst
+  exposed-modules:     Eval, Demo, Syntax, Programs, EvalSubst
   -- other-modules:
   other-extensions:    PatternSynonyms, FunctionalDependencies, OverloadedLists, FlexibleContexts, GeneralizedNewtypeDeriving, RecursiveDo, OverloadedStrings, LambdaCase, TupleSections, MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances
   build-depends:       base >=4.8 && <= 4.10, containers >=0.5 && <0.6, mtl

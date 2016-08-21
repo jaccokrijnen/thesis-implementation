@@ -1,30 +1,25 @@
 {-# LANGUAGE PatternSynonyms, FunctionalDependencies, OverloadedLists, FlexibleContexts, GeneralizedNewtypeDeriving, RecursiveDo, OverloadedStrings, LambdaCase, TupleSections, MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances #-}
+
+
+-- | This module implements evaluation by performing substitution for variables when
+-- bound to a value, as the formal specification states in the thesis.
+-- This is however not very efficient in practice, so the actual used implementation
+-- can be found in Eval.hs.
 module EvalSubst where
 
 import Data.Monoid
-import Data.String
 import Control.Monad.Writer
-import Control.Monad.Identity
 import Control.Monad.Except
-import Control.Monad.Reader
-import qualified Data.Set as Set
-import Data.Set (Set)
 import Data.Maybe
 
 import Syntax
+import Classes
 
 
 
-
-
-
--- This module implements evaluation by performing substitution for variables when
--- bound to a value, as the formal specification states in the thesis.
--- This is however not very efficient in practice, therefore the actual
--- implementation of operational semantics is in Eval.hs, which uses closures
--- instead.
-
-
+-- | A monad with
+--      * exception effect for execution failure (pattern matching, type errors, etc.)
+--      * writer effect for collecting the violation messages of contracts
 newtype Eval a = Eval (ExceptT
                            String
                            (Writer [MonitorResult])
@@ -32,11 +27,16 @@ newtype Eval a = Eval (ExceptT
                       )
     deriving (Functor, Applicative, Monad, MonadFix, MonadWriter [MonitorResult], MonadError String)
 
+
+-- | A monitor result
 data MonitorResult
     = MFail String
     | MSuccess
     deriving (Show, Eq)
 
+
+-- | A MonitorResult is a monoid with bias for
+-- its left hand side
 instance Monoid MonitorResult where
     m@(MFail _) `mappend` _ = m
     _ `mappend` x = x
@@ -45,23 +45,34 @@ instance Monoid MonitorResult where
 
 runEval (Eval x) = x
 
---getVar :: String -> Eval Value
---getVar x = do
---    mbVal <- lookup x <$> ask
---    case mbVal of
---        Nothing -> throwError ("Unbound variable: " <> x)
---        Just v -> return v
 
+-- | Raise a violation
 raiseViolation :: MonitorResult -> Eval ()
 raiseViolation m = tell [m]
 
+
+-- | Evaluate a lambdaplus term
 eval :: LambdaPlus -> (Either String Value, [MonitorResult])
 eval t = runWriter . runExceptT . runEval $ eval' t
 
+
+-- | Assume the term always terminates with a value
 unsafeEval t = case eval t of
     (Right v, _) -> v
 
 
+-- | Matches a value with a pattern to produce a series of substitutions (or fail
+-- if there exists no unifier)
+patternMatch :: Pattern -> Value -> Maybe [(String, Value)]
+patternMatch PNil VNil = Just []
+patternMatch (PCons p1 p2) (VCons v1 v2) = (++) <$> patternMatch p2 v2 <*> patternMatch p1 v1
+patternMatch (PVar x) val = Just [(x, val)]
+patternMatch (PBool b1) (VBool b2) | b1 == b2 = Just []
+patternMatch _ _ = Nothing
+
+
+
+-- | Describes the evaluation semantics in the Eval monad
 eval' :: LambdaPlus -> Eval Value
 eval' t =
     case t of
@@ -104,7 +115,7 @@ eval' t =
             eval' t
         LPMonitor c@(CRefinement var ref describe mbTerm) t -> do
             v <- eval' t
-            res <- evalRefinement (substitute (var, v) ref)
+            res <- eval' (substitute (var, v) ref)
             case res of
                 (VBool False) -> raiseViolation (MFail $ show t <> " does not satisfy " <> show c)
                 (VBool True) -> return ()
@@ -131,7 +142,3 @@ eval' t =
             (VInt x) <- eval' t1
             (VInt y) <- eval' t2
             return (VBool (x `op` y))
-
-evalRefinement :: LambdaPlus -> Eval Value
-evalRefinement t = do
-    eval' t
