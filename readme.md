@@ -6,7 +6,8 @@ This package is a prototype of the lambda-plus language and annotators as descri
 > cabal repl
 > import Demo
 > sort_correct
->
+> sort_incorrect_perm
+> sort_incorrect_nondesc
 
 
 For student programs and more annotators/contracts, see Programs.hs
@@ -14,3 +15,5 @@ For student programs and more annotators/contracts, see Programs.hs
 For the language definition, see Syntax.hs
 
 For the operational semantics, see Eval.hs (or EvalSubst.hs which is not used but follows the semantics from the thesis)
+
+Tested with cabal version 1.24.0.0 and ghc 8.0.1
