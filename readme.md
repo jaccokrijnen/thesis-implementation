@@ -3,6 +3,8 @@ Master thesis implementation (Better Feedback for Incorrect Programs by Using Co
 
 This package is a prototype of the lambda-plus language and annotators as described in my master thesis. All modules are self-documented. To see the result of the annotators, run:
 
+> cabal sandbox init
+> cabal install
 > cabal repl
 > import Demo
 > sort_correct

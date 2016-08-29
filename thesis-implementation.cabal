@@ -12,11 +12,11 @@ maintainer:          jaccokrijnen@gmail.com
 -- copyright:
 -- category:
 build-type:          Simple
-extra-source-files:  ChangeLog.md
+extra-source-files:  ChangeLog.md, readme.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Eval, Demo, Syntax, Programs, EvalSubst
+  exposed-modules:     Eval, Demo, Syntax, Programs, EvalSubst, Classes
   -- other-modules:
   other-extensions:    PatternSynonyms, FunctionalDependencies, OverloadedLists, FlexibleContexts, GeneralizedNewtypeDeriving, RecursiveDo, OverloadedStrings, LambdaCase, TupleSections, MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances
   build-depends:       base >=4.8 && <= 4.10, containers >=0.5 && <0.6, mtl
